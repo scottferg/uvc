@@ -7,6 +7,10 @@ from urlparse import urlparse, urlunparse
 from uvc.path import path
 from uvc.exc import *
 
+import logging
+
+log = logging.getLogger("uvc.commands")
+
 class Sentinel(object):
     pass
 
@@ -139,7 +143,7 @@ class clone(BaseCommand):
         source = _apply_auth(source, context)
                     
         self.source = source
-        
+
         if len(args) == 2:
             self.dest = args[1]
         else:
@@ -151,6 +155,11 @@ class clone(BaseCommand):
             if not last_path:
                 raise BadArgument("Clone requires source and dest arguments.")
             self.dest = last_path
+
+        # If this is a git repository, make sure to
+        # remove the extension in the URL
+        if self.dest[-4:] == ".git":
+            self.dest = self.dest[:-4]
 
         context.validate_new_directory(self.dest)
     
