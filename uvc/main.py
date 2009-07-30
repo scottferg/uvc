@@ -6,14 +6,14 @@ import subprocess
 import tempfile
 import logging
 
-from uvc import commands, hg, svn
+from uvc import commands, hg, svn, git
 from uvc.util import run_in_directory
 from uvc.path import path
 from uvc.exc import *
 
 log = logging.getLogger("uvc.main")
 
-dialects = dict(hg=hg.HgDialect(), svn=svn.SVNDialect())
+dialects = dict(hg=hg.HgDialect(), svn=svn.SVNDialect(), git=git.GitDialect())
 
 class Context(object):
     # all schemes are allowed
@@ -164,10 +164,20 @@ def convert(context, args, dialect=None):
 
 def run_command(command, context):
     command_line = command.get_command_line()
+    
+    # in some cases, such as Subversion's version of the
+    # generic "commit", which is supposed to commit locally,
+    # the command itself runs no vcs commands.
+    if not command_line:
+        return command.get_output()
+        
     log.debug("Running: %s", (command_line,))
     log.debug("Working dir: %s", context.working_dir)
     
     returncode, stdout = run_in_directory(context.working_dir, command_line)
+    
+    if returncode == 0 and hasattr(command, "command_successful"):
+        command.command_successful()
     
     output = command.process_output(returncode, stdout)
     log.debug("Command output: %s", output)

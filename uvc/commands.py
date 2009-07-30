@@ -70,6 +70,7 @@ class DialectCommand(object):
     
 class BaseCommand(object):
     def __init__(self, context, args):
+        self.working_dir = context.working_dir
         self.auth = context.auth
         self.user = context.user
     
@@ -140,6 +141,8 @@ class clone(BaseCommand):
         
         parsed = urlparse(source)
         
+        self.source_without_auth = source
+        
         source = _apply_auth(source, context)
                     
         self.source = source
@@ -155,11 +158,6 @@ class clone(BaseCommand):
             if not last_path:
                 raise BadArgument("Clone requires source and dest arguments.")
             self.dest = last_path
-
-        # If this is a git repository, make sure to
-        # remove the extension in the URL
-        if self.dest[-4:] == ".git":
-            self.dest = self.dest[:-4]
 
         context.validate_new_directory(self.dest)
     
@@ -292,7 +290,18 @@ class StatusOutput(object):
     
     def __str__(self):
         return "\n".join(" ".join(info) for info in self.data) + "\n"
+        
+class SimpleStringOutput(object):
+    """Output that doesn't involve a return code"""
     
+    returncode = None
+    
+    def __init__(self, output):
+        self.output = output
+        
+    def __str__(self):
+        return self.output
+        
 class push(BaseCommand):
     """The push command"""
     

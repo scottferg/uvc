@@ -1,8 +1,12 @@
 """Implements the Subversion VCS dialect."""
 import os
+import re
+import glob
 
-from uvc.commands import UVCError, DialectCommand, StatusOutput, BaseCommand
+from uvc.commands import UVCError, DialectCommand, StatusOutput, BaseCommand,\
+                        SimpleStringOutput
 from uvc.exc import RepositoryAlreadyInitialized
+from uvc import util
 
 class SVNError(UVCError):
     """A Subversion-specific error."""
@@ -12,8 +16,7 @@ class SVNCommand(DialectCommand):
     dialect_name = "svn"
 
 class AuthSVNCommand(SVNCommand):
-    def command_parts(self):
-        parts = super(AuthSVNCommand, self).command_parts()
+    def add_auth_info(self, parts):
         auth = self.generic.auth
         if auth:
             if auth['type'] == "ssh":
@@ -31,40 +34,46 @@ class AuthSVNCommand(SVNCommand):
                 parts.insert(2, auth['username'])
                 parts.insert(3, "--password")
                 parts.insert(4, auth['password'])
-        return parts
-
-class init(SVNCommand):
-    reads_remote = False
-    writes_remote = False
-
-    @classmethod
-    def from_args(cls, context, args):
-        return cls(context, args)
-
-    def __init__(self, context, args):
-        from uvc import main
-        dialect = main.infer_dialect(context.working_dir)
-        if dialect:
-            raise RepositoryAlreadyInitialized("It looks like there is an %s" 
-                            " repository there" % dialect.name)
-
+    
     def command_parts(self):
-        return ['init']
+        parts = super(AuthSVNCommand, self).command_parts()
+        self.add_auth_info(parts)
+        return parts
 
 class clone(AuthSVNCommand):
     reads_remote = True
     writes_remote = False
 
     def command_parts(self):
-        parts = super(clone, self).command_parts()
-        parts[5] = "checkout"
+        parts = ["checkout", self.source_without_auth, self.dest]
+        
+        self.add_auth_info(parts)
+            
         return parts
 
 checkout = clone
 
+def _commit_log_file(working_dir):
+    return working_dir / ".svn_commit_messages"
+
 class commit(SVNCommand):
     reads_remote = False
     writes_remote = False
+    
+    def command_parts(self):
+        return []
+        
+    def get_command_line(self):
+        return None
+        
+    def get_output(self):
+        commit_log = _commit_log_file(self.generic.working_dir)
+        if not commit_log.exists():
+            content = self.generic.message + "\n\n"
+        else:
+            content = commit_log.text() + self.generic.message + "\n\n"
+        commit_log.write_text(content)
+        return SimpleStringOutput("Commit message saved. Don't forget to push to save to the remote repository!")
 
 class diff(SVNCommand):
     reads_remote = False
@@ -73,7 +82,7 @@ class diff(SVNCommand):
 class remove(SVNCommand):
     reads_remote = False
     writes_remote = False
-
+    
     def command_parts(self):
         parts = super(remove, self).command_parts()
         # uvc's remove command implies "force"
@@ -82,41 +91,82 @@ class remove(SVNCommand):
 
 delete = remove
 
+_status_line_mask = re.compile("^(.)..... (.*)$")
+
+def _get_file_list(working_dir, status="?"):
+    retcode, stdout = util.run_in_directory(working_dir,
+        ["svn", "status"])
+    status_lines = stdout.read().split("\n")
+    file_list = []
+    for line in status_lines:
+        m = _status_line_mask.match(line)
+        if not m:
+            continue
+        if m.group(1) == status:
+            filename = m.group(2)
+            if not filename.startswith("."):
+                file_list.append(m.group(2))
+    
+    return file_list
+
 class add(SVNCommand):
     reads_remote = False
     writes_remote = False
 
+    def command_parts(self):
+        parts = super(add, self).command_parts()
+        if not self.targets:
+            parts.extend(_get_file_list(self.generic.working_dir))
+        return parts
+
 class push(AuthSVNCommand):
     reads_remote = True
     writes_remote = True
-
+    
+    def get_command_line(self):
+        commit_log = _commit_log_file(self.generic.working_dir)
+        if not commit_log.exists():
+            return None
+        return super(push, self).get_command_line()
+        
+    def get_output(self):
+        # only called if the commit_log doesn't exist
+        return SimpleStringOutput("Nothing to push. Run commit first.")
+    
     def command_parts(self):
-        parts = super(clone, self).command_parts()
-        parts[0] = "commit"
-        parts.insert(1, "-m");
-        # Where are we storing the commit message?
+        parts = []
+        self.add_auth_info(parts)
+        parts.append("commit")
+        parts.append("-m")
+        commit_log = _commit_log_file(self.generic.working_dir)
+        parts.append(commit_log.text())
         return parts
+        
+    def command_successful(self):
+        commit_log = _commit_log_file(self.generic.working_dir)
+        commit_log.unlink()
 
 class update(AuthSVNCommand):
     reads_remote = True
     writes_remote = False
 
-#    def command_parts(self):
-#        parts = super(update, self).command_parts()
-#        parts[0] = "update"
-#        return parts
+    def command_parts(self):
+        parts = ["update"]
+        self.add_auth_info(parts)
+        return parts
 
-#class resolved(SVNCommand):
-#    reads_remote = False
-#    writes_remote = False
-#
-#    def command_parts(self):
-#        parts = super(resolved, self).command_parts()
-#        parts[0] = "resolve"
-#        parts.insert(1, "-m")
-#        if not self.targets:
-#            parts.append("-a")
-#        return parts
+class resolved(SVNCommand):
+   reads_remote = False
+   writes_remote = False
+
+   def command_parts(self):
+       parts = super(resolved, self).command_parts()
+       parts[0] = "resolve"
+       parts.insert(1, "--accept")
+       parts.insert(2, "working")
+       if not self.targets:
+           parts.extend(_get_file_list(self.generic.working_dir, status="C"))
+       return parts
 
 class status(SVNCommand):
     reads_remote = False
@@ -129,12 +179,17 @@ class revert(SVNCommand):
     reads_remote = False
     writes_remote = False
 
-#    def command_parts(self):
-#        parts = super(revert, self).command_parts()
-#        parts.insert(1, "--no-backup")
-#        if not self.targets:
-#            parts.append("-a")
-#        return parts
+    def command_parts(self):
+        parts = super(revert, self).command_parts()
+        if not self.targets:
+            parts.append("-R")
+            pwd = os.getcwd()
+            try:
+                os.chdir(self.generic.working_dir)
+                parts.extend(glob.glob("*"))
+            finally:
+                os.chdir(pwd)
+        return parts
 
 class SVNDialect(object):
     

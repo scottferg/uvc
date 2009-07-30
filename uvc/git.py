@@ -39,11 +39,18 @@ class init(GitCommand):
         
     def command_parts(self):
         return ['init']
-    
 
 class clone(AuthGitCommand):
     reads_remote = True
     writes_remote = False
+
+    def __init__(self, context, args):
+        super(clone, self).__init__(context, args)
+        
+        # If this is a git repository, make sure to
+        # remove the extension in the URL
+        if self.dest[-4:] == ".git":
+            self.dest = self.dest[:-4]
 
 checkout = clone
 
@@ -54,8 +61,7 @@ class commit(GitCommand):
     def command_parts(self):
         parts = super(commit, self).command_parts()
         if self.generic.user:
-            parts.insert(1, "-u")
-            parts.insert(2, self.generic.user)
+            parts.insert(1, "-a")
         return parts
     
 class diff(GitCommand):

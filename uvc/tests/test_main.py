@@ -1,6 +1,6 @@
 import os
 
-from uvc import main, hg, commands, svn
+from uvc import main, hg, commands, svn, git
 
 topdir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", 
                         "testfiles"))
